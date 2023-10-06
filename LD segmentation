@@ -1,0 +1,314 @@
+
+// --- This code is for measuring LD area and number along and segment the cells only, need to comment out certain lines for using for counting nLD or LD in general
+// Bodipy (C1), DIC (or cytoplasmic marker) (C2) and DAPI (C3) intensity within nuclear (C3) area
+
+setBatchMode(true);
+//run("Colors...", "foreground=black background=black selection=pink");
+print("\\Clear");
+run("Clear Results");
+clearROIManager();
+
+// --------- Parameters -----------
+// 1. file formats
+file_format = "nd2";
+save_format = "tif";
+
+// 2. selecet chennels for ROI definition (typically C1 with nuclei) and 
+// for the target that is going to be saved as a tif file with ROIs
+bodipy_channel = "C1";
+target_channel = "C2";
+dapi_channel = "C3";
+ROI_channel = dapi_channel;
+cytosol_channel = target_channel;
+
+// Name what segmented images will be called
+nucleus_segmented = "Nucleus_segmented";
+LD_segmented = "LD_segmented";
+cytosol_segmented = "Cytosol_segmented";
+
+// 3. Settings for autothreshold
+// 3-1. Set Gaussian blur sigma and auto threshold method
+gaussian_blur_sigma = 2;
+thresholdMethod_nucleus = "Li";
+thresholdMethod_BODIPY = "Li";
+
+// Threshold value for cytosol segmentation
+cytosol_threshold = 2150;
+
+// 3-2. Set the min and max area of ROIs that are included into the 
+min_size_of_roi = 50;
+max_size_of_roi = 400;
+
+// 3-2. Set the min and max area of lipid droplet
+min_size_of_LD = 1;
+max_size_of_LD = 10;
+
+// 3-3. Choose if watershed is performed or not. Comment in and out either of Yes or No
+watershed = "Yes";
+//watershed = "No";
+
+// 3-4. Choose if nuclear ROI on image edge is exluded or not. If yes, place " exclude". If no, place "" (blank)
+exclude_or_not = " exclude";
+//exclude_or_not = "";
+
+// ------- Actual processing -------
+
+// 1. Direct the user to define the folders for input and output
+dataFolder = getDirectory("Choose the folder you want to process");
+//wekaClassifierFolder = getDirectory("Choose where the classifier is");
+
+// 2. Do analysis
+// 2-1. Get the list of the files
+filelist=getFileList(dataFolder);
+
+// 2-2. Analyze indiviual files
+// Get the number of files with targeted format
+number_of_files = 0;
+for (i = 0; i < lengthOf(filelist); i++) {	
+	file=filelist[i];
+	if (endsWith(file, file_format)) {
+//		Array.deleteValue(filelist, file);
+		number_of_files += 1;	
+	}
+};
+
+// Make a file list with only image files
+image_filelist = newArray(number_of_files);
+for (i = 0; i < lengthOf(filelist); i++) {
+		file=filelist[i];
+		if (endsWith(file, file_format)) {
+			image_filelist[i] = file;
+		}
+};
+
+
+// Prepare an empty array where results will be stored
+filenames_array = newArray(number_of_files);
+ratio_array = newArray(number_of_files);
+roi_array = newArray(number_of_files);
+
+// Analysis of images
+for (i = 0; i < number_of_files; i++) {	
+	file=image_filelist[i];
+	
+	if (endsWith(file, file_format)) {
+		// process and image analysis - see the functions below
+		print("About to analyze: " + file);
+		
+		// Get the results (cLD area/Cytosol area ratio, number of cells)
+		results = analyzeImage();
+		
+		// Store the filename and results to the arrays
+		filenames_array[i] = file;
+		ratio_array[i] = results[0];
+		roi_array[i] = results[1];
+		print("Finished analyzing: " + file);
+	}
+}
+
+// Make a result table from the arrays
+for (i = 0; i < number_of_files; i++) {
+	setResult("File name", i, filenames_array[i]);
+	setResult("Ratio", i, ratio_array[i]);
+	setResult("NofCells", i, roi_array[i]);
+}
+
+// Save the results to CSV
+selectWindow("Results"); saveAs("Measurements", dataFolder + "Results of " + file + ".csv");
+
+// Let you know the end of analysis of all data
+print("Finshed all analysis");
+
+
+// --------- Functions ------------
+// ----- Top-level functions-----
+function analyzeImage() { 
+	// function to anaylyze an given image file
+	// 1. open the file
+	open(file);
+
+	// 2. Process image
+	// 2-1. Max project and split channels
+	maxProject_then_splitChannels();
+	
+	// 2-2. Segment from nuclei image and make ROIs
+	//createNuclearSegmentation(ROI_channel);
+	
+	// 2-3. Segment from BODIPY image
+	segmentLD(bodipy_channel);
+	
+	// 2-4. Segment cellular area excluding nucleus
+	//segmentCytosol(cytosol_channel);
+//	manuallySegmentCytosol(cytosol_channel);
+	
+	// 3. Quantify LDs
+	// Multiply segmented LD and segmented cytosol to obtain segmented "cytosolic" LD
+	//imageCalculator("Subtract create", cytosol_segmented, nucleus_segmented);
+	//rename("true_cytosol_segmented");
+	
+	// Create remove nuclear LDs from "cytosolic" LD
+	//imageCalculator("Multiply create", "true_cytosol_segmented", LD_segmented);
+	//rename("cLD_segmented");
+	
+	
+	// Measure total area of cytosol without nucleus
+	//cytosol_area = measureSegmentedImage("true_cytosol_segmented");
+	//cLD_area = measureSegmentedImage("cLD_segmented");
+	//print(cytosol_area, cLD_area, cLD_area/cytosol_area);
+	
+	// Store the results and file name
+	array = newArray(2);
+	//array[0] = cLD_area/cytosol_area;
+	//array[1] = roiManager("count");
+	
+	//selectWindow("true_cytosol_segmented"); setMinAndMax(0, 1);
+	//saveImageWithROIs("true_cytosol_segmented");
+	selectWindow(LD_segmented); setMinAndMax(0, 1);
+	saveImageWithROIs(LD_segmented);
+	
+	run("Clear Results"); run("Close All"); clearROIManager();
+	
+	return array;
+
+}
+
+// ----- Second-level functions-----
+function measureSegmentedImage(image) { 
+	// Measure total area of value=1 in a segmented image
+	run("Set Measurements...", "area mean redirect=None decimal=3");
+	selectWindow(image);
+	run("Measure"); area = getResult("Area", 0); mean = getResult("Mean", 0);
+	total = area * mean;
+	run("Clear Results");
+	return total
+}
+
+function maxProject_then_splitChannels() { 
+	// For a stack of images, max project and split channels to C1,C2,,,
+	
+	// 1. Get the number of channels
+	getDimensions(width, height, channels, slices, frames);
+	number_of_channels = channels;
+	
+	// 2. Max intesity Z project
+	run("Z Project...", "projection=[Max Intensity]");
+	maxProjectedImage = getTitle();
+	
+	// 3. Split and rename each image to C1,C2,,,
+	selectWindow(maxProjectedImage);
+	run("Split Channels");
+	for (i = 1; i < number_of_channels+1; i++) {
+		selectWindow("C" + i + "-" + maxProjectedImage);
+		rename("C" + i);
+		run("Grays");
+	}
+}
+
+function createNuclearSegmentation(channel) { 
+	// Make a segmented binary image and ROIs
+
+	// 1. Duplicate
+	selectWindow(channel);
+	run("Duplicate...", "title=segmented");
+
+	// 2. Make a binary image
+	run("Subtract Background...", "rolling=100");
+	run("Gaussian Blur...", "sigma=" + gaussian_blur_sigma);
+	setAutoThreshold(thresholdMethod_nucleus + " dark");
+	setOption("BlackBackground", true);
+	run("Convert to Mask");
+	rename(nucleus_segmented);
+	run("Open");
+	run("Fill Holes");
+	if (watershed == "Yes") {
+		run("Watershed");
+	};
+	
+	// 3. Make ROIs from the binary image
+	run("Set Measurements...", "area mean shape redirect=None decimal=3");
+	run("Analyze Particles...", "size=" + min_size_of_roi + "-" + max_size_of_roi + exclude_or_not + " include add");
+	run("Divide...", "value=255");
+	
+}
+
+function segmentLD(channel){
+	// Segment BODIPY image into two classes: 1 for LD and 0 for else
+	
+	// Pre-process 
+	selectWindow(channel);
+	run("Duplicate...", " ");
+	run("Subtract Background...", "rolling=40");
+	run("Smooth");
+	
+	// Segment
+	run("Auto Threshold", "method=" + thresholdMethod_BODIPY + " white");
+	run("Watershed");
+	run("Divide...", "value=255");
+	rename(LD_segmented);
+	
+}
+
+function segmentCytosol(channel) { 
+	// segment cytosol area (excluding nucleus) from IF image such as Sun2
+	selectWindow(channel);
+	run("Mean...", "radius=3");
+//	run("Gaussian Blur...", "sigma=2");
+	setThreshold(cytosol_threshold, 65535);
+	setOption("BlackBackground", true);
+	run("Convert to Mask");
+	rename(cytosol_segmented);
+	run("Divide...", "value=255");
+}
+
+function manuallySegmentCytosol(channel) { 
+	// segment cytosol area (excluding nucleus) from IF image such as Sun2
+	selectWindow(channel);
+	waitForUser("Select cell area!");
+	run("Create Mask");
+	rename(cytosol_segmented);
+	run("Divide...", "value=255");
+}
+
+// ----- Third-level functions-----
+function getMeasureResult(channel, item_name) { 
+	// Measure the mean of the given channel within ROIs and return the results as an array
+
+	// 1. redirect measurement to the channel
+	run("Set Measurements...", "area mean redirect=" + channel + " decimal=3");
+	
+	// 2. measure mean of tag protein in all ROIs
+	roiManager("Deselect");
+	roiManager("Measure");
+	
+	// 3. store mean data to an array
+	array = newArray(nResults);
+	for (i = 0; i < nResults(); i++) {
+	   array[i] = getResult(item_name, i);
+	}
+	
+	// 4. clear the results
+	run("Clear Results");
+
+	// 5. return the result array
+	return array;
+}
+
+function saveImageWithROIs(channel) { 
+	// show ROIs on target, and save the image
+	selectWindow(channel);
+	roiManager("Show None");
+	roiManager("Show All with labels");
+	selectWindow(channel);
+	run("Flatten");
+	file_wo_format = replace(file, ".nd2", "");
+	saveAs(save_format, dataFolder + file_wo_format + "_" + channel);
+}
+
+function clearROIManager() { 
+	// Clear up ROIs
+	if (roiManager("count") != 0) {
+		roiManager("deselect");
+		roiManager("delete");
+	};
+};
+
